@@ -1,121 +1,299 @@
 import 'package:flutter/material.dart';
+import 'package:health/health.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const WalkPuzzleApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class WalkPuzzleApp extends StatelessWidget {
+  const WalkPuzzleApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Walk Puzzle',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const StepCounterPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class StepCounterPage extends StatefulWidget {
+  const StepCounterPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<StepCounterPage> createState() => _StepCounterPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _StepCounterPageState extends State<StepCounterPage> {
+  // Health Connect instance
+  final Health _health = Health();
+  
+  // Step count data
+  int _stepCount = 0;
+  bool _isLoading = false;
+  String _statusMessage = '歩数データを取得中...';
+  bool _hasPermission = false;
+  
+  // Health Connect data types we need
+  static final List<HealthDataType> _dataTypes = [
+    HealthDataType.STEPS,
+  ];
 
-  void _incrementCounter() {
+  @override
+  void initState() {
+    super.initState();
+    _initializeHealthConnect();
+  }
+
+  /// Initialize Health Connect and request permissions
+  Future<void> _initializeHealthConnect() async {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _isLoading = true;
+      _statusMessage = 'Health Connectの初期化中...';
     });
+
+    try {
+      // Check if Health Connect is available
+      bool isAvailable = await _health.isHealthConnectAvailable() ?? false;
+      
+      if (!isAvailable) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = 'Health Connectがインストールされていません。\nGoogle Playストアからインストールしてください。';
+          _hasPermission = false;
+        });
+        return;
+      }
+
+      // Request permissions
+      await _requestPermissions();
+      
+      // If we have permission, fetch step count
+      if (_hasPermission) {
+        await _fetchStepCount();
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _statusMessage = 'エラーが発生しました: ${e.toString()}';
+        _hasPermission = false;
+      });
+    }
+  }
+
+  /// Request permissions for Health Connect
+  Future<void> _requestPermissions() async {
+    setState(() {
+      _statusMessage = '権限をリクエスト中...';
+    });
+
+    try {
+      // Request Android activity recognition permission first
+      var activityPermission = await Permission.activityRecognition.request();
+      
+      if (!activityPermission.isGranted) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = '歩数データの取得には「身体活動」の権限が必要です。';
+          _hasPermission = false;
+        });
+        return;
+      }
+
+      // Request Health Connect permissions
+      bool hasPermissions = await _health.hasPermissions(_dataTypes) ?? false;
+      
+      if (!hasPermissions) {
+        // Request authorization
+        bool authorized = await _health.requestAuthorization(_dataTypes);
+        
+        setState(() {
+          _hasPermission = authorized;
+          if (!authorized) {
+            _isLoading = false;
+            _statusMessage = 'Health Connectの権限が拒否されました。\n設定から権限を許可してください。';
+          }
+        });
+      } else {
+        setState(() {
+          _hasPermission = true;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _statusMessage = '権限リクエストエラー: ${e.toString()}';
+        _hasPermission = false;
+      });
+    }
+  }
+
+  /// Fetch step count from today's midnight to now
+  Future<void> _fetchStepCount() async {
+    setState(() {
+      _isLoading = true;
+      _statusMessage = '歩数データを取得中...';
+    });
+
+    try {
+      // Get today's date at midnight
+      final now = DateTime.now();
+      final midnight = DateTime(now.year, now.month, now.day);
+
+      // Fetch step count data
+      List<HealthDataPoint> healthData = await _health.getHealthDataFromTypes(
+        types: _dataTypes,
+        startTime: midnight,
+        endTime: now,
+      );
+
+      // Calculate total steps
+      int totalSteps = 0;
+      for (var data in healthData) {
+        if (data.type == HealthDataType.STEPS) {
+          totalSteps += (data.value as num).toInt();
+        }
+      }
+
+      setState(() {
+        _stepCount = totalSteps;
+        _isLoading = false;
+        _statusMessage = '本日の歩数: $totalSteps 歩';
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _statusMessage = 'データ取得エラー: ${e.toString()}';
+      });
+    }
+  }
+
+  /// Refresh step count manually
+  Future<void> _refreshStepCount() async {
+    if (_hasPermission) {
+      await _fetchStepCount();
+    } else {
+      await _initializeHealthConnect();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Walk Puzzle - 歩数確認'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              // TODO: Settings page
+            },
+          ),
+        ],
       ),
       body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Health Connect status icon
+              Icon(
+                _hasPermission ? Icons.check_circle : Icons.warning,
+                size: 64,
+                color: _hasPermission ? Colors.green : Colors.orange,
+              ),
+              const SizedBox(height: 24),
+              
+              // Status message
+              Text(
+                _statusMessage,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 32),
+              
+              // Step count display
+              if (_hasPermission && !_isLoading) ...[
+                const Text(
+                  '今日の歩数',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(32),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.blue.shade200, width: 2),
+                  ),
+                  child: Text(
+                    '$_stepCount',
+                    style: TextStyle(
+                      fontSize: 48,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue.shade800,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '歩',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+              
+              // Loading indicator
+              if (_isLoading) ...[
+                const SizedBox(height: 32),
+                const CircularProgressIndicator(),
+              ],
+              
+              const SizedBox(height: 32),
+              
+              // Refresh button
+              ElevatedButton.icon(
+                onPressed: _isLoading ? null : _refreshStepCount,
+                icon: const Icon(Icons.refresh),
+                label: const Text('更新'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 16,
+                  ),
+                ),
+              ),
+              
+              // Retry permission button if no permission
+              if (!_hasPermission && !_isLoading) ...[
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: _initializeHealthConnect,
+                  icon: const Icon(Icons.lock_open),
+                  label: const Text('権限を再リクエスト'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 32,
+                      vertical: 16,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
       ),
     );
   }
