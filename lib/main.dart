@@ -93,10 +93,18 @@ class _StepCounterPageState extends State<StepCounterPage> {
     });
 
     try {
+      print('\n========== 権限リクエスト開始 ==========');
+      
       // Request Android activity recognition permission first
+      print('ステップ1: 身体活動権限のリクエスト...');
       var activityPermission = await Permission.activityRecognition.request();
+      print('身体活動権限のステータス: ${activityPermission.toString()}');
+      print('  - isGranted: ${activityPermission.isGranted}');
+      print('  - isDenied: ${activityPermission.isDenied}');
+      print('  - isPermanentlyDenied: ${activityPermission.isPermanentlyDenied}');
       
       if (!activityPermission.isGranted) {
+        print('❌ 身体活動権限が拒否されました');
         setState(() {
           _isLoading = false;
           _statusMessage = '歩数データの取得には「身体活動」の権限が必要です。';
@@ -104,13 +112,44 @@ class _StepCounterPageState extends State<StepCounterPage> {
         });
         return;
       }
-
-      // Request Health Connect permissions
-      bool hasPermissions = await _health.hasPermissions(_dataTypes) ?? false;
       
-      if (!hasPermissions) {
+      print('✅ 身体活動権限が許可されました\n');
+
+      // Check Health Connect permissions BEFORE requesting
+      print('ステップ2: Health Connect権限の事前チェック...');
+      bool hasPermissionsBefore = await _health.hasPermissions(_dataTypes) ?? false;
+      print('事前チェック結果: hasPermissions = $hasPermissionsBefore');
+      
+      if (!hasPermissionsBefore) {
+        print('\nステップ3: Health Connect権限のリクエスト中...');
+        print('⚠️ これからrequestAuthorizationを呼び出します');
+        print('対象データ型: $_dataTypes');
+        
         // Request authorization
+        print('>>> requestAuthorization() 実行中...');
         bool authorized = await _health.requestAuthorization(_dataTypes);
+        print('<<< requestAuthorization() 完了');
+        print('戻り値（authorized）: $authorized');
+        
+        // Verify AFTER requesting
+        print('\nステップ4: Health Connect権限の事後チェック...');
+        bool hasPermissionsAfter = await _health.hasPermissions(_dataTypes) ?? false;
+        print('事後チェック結果: hasPermissions = $hasPermissionsAfter');
+        
+        // Log discrepancy if any
+        if (authorized != hasPermissionsAfter) {
+          print('⚠️⚠️⚠️ 警告: 戻り値と実際の権限状態が一致しません！');
+          print('  requestAuthorizationの戻り値: $authorized');
+          print('  hasPermissionsの結果: $hasPermissionsAfter');
+          print('  → hasPermissionsの結果を正として採用します');
+          authorized = hasPermissionsAfter;
+        }
+        
+        if (authorized) {
+          print('✅ Health Connect権限が許可されました');
+        } else {
+          print('❌ Health Connect権限が拒否されました');
+        }
         
         setState(() {
           _hasPermission = authorized;
@@ -120,11 +159,18 @@ class _StepCounterPageState extends State<StepCounterPage> {
           }
         });
       } else {
+        print('✅ Health Connect権限は既に許可されています');
         setState(() {
           _hasPermission = true;
         });
       }
-    } catch (e) {
+      
+      print('========== 権限リクエスト終了 ==========\n');
+    } catch (e, stackTrace) {
+      print('❌❌❌ 権限リクエスト中に例外が発生しました');
+      print('エラー: $e');
+      print('スタックトレース: $stackTrace');
+      
       setState(() {
         _isLoading = false;
         _statusMessage = '権限リクエストエラー: ${e.toString()}';
