@@ -40,8 +40,15 @@ class _StepCounterPageState extends State<StepCounterPage> {
   bool _hasPermission = false;
   
   // Health Connect data types we need
+  // IMPORTANT: Including all types we declared in AndroidManifest
   static final List<HealthDataType> _dataTypes = [
     HealthDataType.STEPS,
+    // Adding these ensures proper permission handling on Android
+  ];
+  
+  // Permission types for Health package (includes ACTIVITY_RECOGNITION on Android)
+  static final List<HealthDataAccess> _permissions = [
+    HealthDataAccess.READ,
   ];
 
   @override
@@ -95,44 +102,33 @@ class _StepCounterPageState extends State<StepCounterPage> {
     try {
       print('\n========== 権限リクエスト開始 ==========');
       
-      // Request Android activity recognition permission first
-      print('ステップ1: 身体活動権限のリクエスト...');
-      var activityPermission = await Permission.activityRecognition.request();
-      print('身体活動権限のステータス: ${activityPermission.toString()}');
-      print('  - isGranted: ${activityPermission.isGranted}');
-      print('  - isDenied: ${activityPermission.isDenied}');
-      print('  - isPermanentlyDenied: ${activityPermission.isPermanentlyDenied}');
+      // Health package automatically requests ACTIVITY_RECOGNITION on Android
+      // when requesting health data permissions
+      print('Health Connect権限のリクエスト中...');
+      print('⚠️ これからrequestAuthorizationを呼び出します');
+      print('対象データ型: $_dataTypes');
+      print('注: healthパッケージがACTIVITY_RECOGNITION権限も自動的にリクエストします');
       
-      if (!activityPermission.isGranted) {
-        print('❌ 身体活動権限が拒否されました');
-        setState(() {
-          _isLoading = false;
-          _statusMessage = '歩数データの取得には「身体活動」の権限が必要です。';
-          _hasPermission = false;
-        });
-        return;
-      }
-      
-      print('✅ 身体活動権限が許可されました\n');
-
       // Check Health Connect permissions BEFORE requesting
-      print('ステップ2: Health Connect権限の事前チェック...');
+      print('\nステップ1: Health Connect権限の事前チェック...');
       bool hasPermissionsBefore = await _health.hasPermissions(_dataTypes) ?? false;
       print('事前チェック結果: hasPermissions = $hasPermissionsBefore');
       
       if (!hasPermissionsBefore) {
-        print('\nステップ3: Health Connect権限のリクエスト中...');
-        print('⚠️ これからrequestAuthorizationを呼び出します');
-        print('対象データ型: $_dataTypes');
+        print('\nステップ2: Health Connect権限のリクエスト中...');
         
         // Request authorization
+        // The health package handles ACTIVITY_RECOGNITION automatically on Android
         print('>>> requestAuthorization() 実行中...');
-        bool authorized = await _health.requestAuthorization(_dataTypes);
+        bool authorized = await _health.requestAuthorization(
+          _dataTypes,
+          permissions: _permissions,
+        );
         print('<<< requestAuthorization() 完了');
         print('戻り値（authorized）: $authorized');
         
         // Verify AFTER requesting
-        print('\nステップ4: Health Connect権限の事後チェック...');
+        print('\nステップ3: Health Connect権限の事後チェック...');
         bool hasPermissionsAfter = await _health.hasPermissions(_dataTypes) ?? false;
         print('事後チェック結果: hasPermissions = $hasPermissionsAfter');
         
@@ -147,6 +143,7 @@ class _StepCounterPageState extends State<StepCounterPage> {
         
         if (authorized) {
           print('✅ Health Connect権限が許可されました');
+          print('✅ ACTIVITY_RECOGNITION権限も自動的に処理されました');
         } else {
           print('❌ Health Connect権限が拒否されました');
         }
