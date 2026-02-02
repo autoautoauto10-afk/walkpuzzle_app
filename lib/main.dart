@@ -141,31 +141,90 @@ class _StepCounterPageState extends State<StepCounterPage> {
     });
 
     try {
-      // Get today's date at midnight
+      // Get current time in local timezone (JST)
       final now = DateTime.now();
-      final midnight = DateTime(now.year, now.month, now.day);
-
-      // Fetch step count data
+      
+      // Get today's midnight in local timezone
+      // Use local timezone explicitly
+      final midnight = DateTime(now.year, now.month, now.day, 0, 0, 0).toLocal();
+      final endTime = now.toLocal();
+      
+      // デバッグログ: クエリの時間範囲を出力
+      print('=== Health Connect クエリ開始 ===');
+      print('現在時刻: $now');
+      print('ローカルタイムゾーン: ${now.timeZoneName} (UTC${now.timeZoneOffset})');
+      print('クエリ開始時刻 (midnight): $midnight');
+      print('クエリ終了時刻 (now): $endTime');
+      print('クエリ期間: ${endTime.difference(midnight).inHours}時間');
+      
+      // 方法1: 個別データポイントの取得を試みる
+      print('\n--- 方法1: getHealthDataFromTypes ---');
+      print('Health Connectにデータをリクエスト中...');
       List<HealthDataPoint> healthData = await _health.getHealthDataFromTypes(
         types: _dataTypes,
         startTime: midnight,
-        endTime: now,
+        endTime: endTime,
       );
+      
+      // デバッグログ: 取得したデータポイントの詳細を出力
+      print('取得したデータポイント数: ${healthData.length}');
+      
+      if (healthData.isEmpty) {
+        print('⚠️ データポイントが0件です。');
+      } else {
+        print('--- 取得した生データの詳細 ---');
+        for (int i = 0; i < healthData.length; i++) {
+          var data = healthData[i];
+          print('データ[$i]:');
+          print('  タイプ: ${data.type}');
+          print('  値: ${data.value}');
+          print('  開始時刻: ${data.dateFrom}');
+          print('  終了時刻: ${data.dateTo}');
+          print('  ソース: ${data.sourceId} (${data.sourceName})');
+          print('  ユニット: ${data.unit}');
+        }
+      }
 
-      // Calculate total steps
+      // Calculate total steps from individual data points
       int totalSteps = 0;
       for (var data in healthData) {
         if (data.type == HealthDataType.STEPS) {
-          totalSteps += (data.value as num).toInt();
+          int stepValue = (data.value as num).toInt();
+          totalSteps += stepValue;
+          print('歩数を加算: +$stepValue (累計: $totalSteps)');
         }
       }
+      
+      // 方法2: データポイントが0件の場合、集計データを試す
+      if (healthData.isEmpty || totalSteps == 0) {
+        print('\n--- 方法2: getTotalStepsInInterval (集計データ) ---');
+        try {
+          int? aggregateSteps = await _health.getTotalStepsInInterval(midnight, endTime);
+          print('集計データから取得した歩数: $aggregateSteps');
+          
+          if (aggregateSteps != null && aggregateSteps > 0) {
+            totalSteps = aggregateSteps;
+            print('✅ 集計データを使用します: $totalSteps 歩');
+          } else {
+            print('⚠️ 集計データも0件または取得失敗');
+          }
+        } catch (aggregateError) {
+          print('❌ 集計データ取得エラー: $aggregateError');
+        }
+      }
+      
+      print('\n=== 最終結果: 合計歩数 = $totalSteps 歩 ===');
+      print('');
 
       setState(() {
         _stepCount = totalSteps;
         _isLoading = false;
-        _statusMessage = '本日の歩数: $totalSteps 歩';
+        _statusMessage = '本日の歩数: $totalSteps 歩\n(データポイント数: ${healthData.length}件)';
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('❌ エラー発生: $e');
+      print('スタックトレース: $stackTrace');
+      
       setState(() {
         _isLoading = false;
         _statusMessage = 'データ取得エラー: ${e.toString()}';
